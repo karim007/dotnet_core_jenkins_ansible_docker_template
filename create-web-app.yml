@@ -1,0 +1,86 @@
+- hosts: localhost
+  connection: local 
+  gather_facts: false
+
+  vars:
+    resource_group: "ansible_jenkins"
+    location: westeurope
+    registry_name: acr{{ rpfx }}
+    repo_url: "https://github.com/karim007/dotnet_core_hello_world.git"
+    workspace: /tmp/project
+    image_name: "ubuntu"
+    http_port: 80
+    email: test@email.com
+
+    azure_client_id: ""
+    azure_secret: ""
+    azure_tenant_id: ""
+    azure_subscription_id: ""
+
+  tasks:
+
+    - name: Create a resource group
+      azure_rm_resourcegroup:
+        client_id: "{{ azure_client_id }}"
+        secret: "{{ azure_secret }}"
+        tenant: "{{ azure_tenant_id }}"
+        subscription_id: "{{ azure_subscription_id }}"
+        name: "{{ resource_group }}"
+        location: "{{ location }}"
+
+    - name: Prepare random postfix
+      set_fact:
+        rpfx: "{{ 1000 | random }}"
+      run_once: yes
+
+    - name: Git Clone
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ workspace }}"
+
+
+    - name: Create Azure Container Registry
+      azure_rm_containerregistry:
+        client_id: "{{ azure_client_id }}"
+        secret: "{{ azure_secret }}"
+        tenant: "{{ azure_tenant_id }}"
+        subscription_id: "{{ azure_subscription_id }}"
+        resource_group: "{{ resource_group }}"
+        name: "{{ registry_name}}"
+        admin_user_enabled: True
+        sku: Standard
+      register: acr_result
+
+    - name: Login docker registry
+      docker_login:
+        registry: "{{ registry_name }}.azurecr.io"
+        username: "{{ registry_name }}"
+        password: "{{ acr_result.credentials.password }}"
+        email: "{{ email }}"
+
+    - name: Docker Build and Push
+      docker_image:
+        path:  "{{ workspace }}"
+        name: "{{ registry_name }}.azurecr.io/{{ image_name }}"
+        push: yes
+
+    - name: Create Azure Container Instance
+      azure_rm_containerinstance:
+        client_id: "{{ azure_client_id }}"
+        secret: "{{ azure_secret }}"
+        tenant: "{{ azure_tenant_id }}"
+        subscription_id: "{{ azure_subscription_id }}"
+        resource_group: "{{ resource_group }}"
+        name: "{{ image_name }}"
+        dns_name_label: "test-jenkins-pipeline"
+        ip_address: public
+        ports:
+          - "{{ http_port }}"
+        registry_login_server: "{{ registry_name }}.azurecr.io"
+        registry_username: "{{ registry_name }}"
+        registry_password: "{{ acr_result.credentials.password }}"
+        containers:
+          - name: "{{ image_name }}"
+            ports:
+              - "{{ http_port }}"
+            image: "{{ registry_name }}.azurecr.io/{{ image_name }}"
